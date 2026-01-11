@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <title>緊急通報系統原型</title>
+    <style>
+        /* --- 基礎設定 --- */
+        :root {
+            --sos-red: #e63946;
+            --sos-dark: #b92b2b;
+            --sos-green: #2a9d8f;
+            --bg-color: #f1faee;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* 防止滾動 */
+        }
+
+        /* --- 模擬地圖背景 --- */
+        .map-placeholder {
+            flex: 1;
+            background-image: radial-gradient(#d1d1d1 1px, transparent 1px);
+            background-size: 20px 20px;
+            background-color: #e9ecef;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #adb5bd;
+            font-size: 2rem;
+            font-weight: bold;
+            z-index: 1;
+        }
+
+        /* --- 開發者除錯面板 (實際產品可隱藏) --- */
+        #debug-console {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: #00ff00;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 10px;
+            border-radius: 8px;
+            height: 150px;
+            overflow-y: auto;
+            z-index: 2;
+            pointer-events: none; /* 讓點擊穿透 */
+        }
+
+        /* --- 底部固定 SOS 容器 --- */
+        .sos-container {
+            position: fixed;
+            bottom: 40px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            pointer-events: none; /* 容器不擋互動，只有按鈕擋 */
+        }
+
+        /* --- 按鈕本體 --- */
+        .sos-btn {
+            pointer-events: auto;
+            position: relative;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background-color: var(--sos-red);
+            color: white;
+            border: none;
+            box-shadow: 0 4px 15px rgba(230, 57, 70, 0.5);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            overflow: hidden;
+            transition: transform 0.1s;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+        }
+
+        /* 按下時的輕微縮放 */
+        .sos-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* --- 內部圖示與文字 --- */
+        .sos-btn .icon {
+            font-size: 28px;
+            margin-bottom: 2px;
+            z-index: 3;
+            line-height: 1;
+        }
+
+        .sos-btn .label {
+            font-size: 11px;
+            font-weight: bold;
+            z-index: 3;
+        }
+
+        /* --- 集氣動畫層 (紅色深色背景) --- */
+        .sos-btn::after {
+            content: "";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 120%; /* 確保覆蓋 */
+            height: 120%;
+            background-color: var(--sos-dark);
+            border-radius: 50%;
+            transform: translate(-50%, -50%) scale(0); /* 從中心開始 */
+            opacity: 1;
+            transition: transform 0s;
+            z-index: 1;
+        }
+
+        /* 觸發集氣動畫 */
+        .sos-btn.pressing::after {
+            transform: translate(-50%, -50%) scale(1);
+            transition: transform 1.5s linear; /* 1.5秒集氣時間 */
+        }
+
+        /* 成功狀態 */
+        .sos-btn.activated {
+            background-color: var(--sos-green);
+            box-shadow: 0 4px 15px rgba(42, 157, 143, 0.5);
+        }
+        
+        .sos-btn.activated::after {
+            opacity: 0; /* 隱藏集氣層 */
+        }
+
+        /* --- 提示文字 --- */
+        .hint-text {
+            margin-top: 12px;
+            font-size: 13px;
+            color: #333;
+            background-color: rgba(255,255,255,0.9);
+            padding: 6px 12px;
+            border-radius: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            font-weight: 500;
+            transition: opacity 0.3s;
+        }
+
+        /* 隱藏提示文字的 class */
+        .fade-out {
+            opacity: 0;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="map-placeholder">
+        MAP VIEW
+    </div>
+
+    <div id="debug-console">系統準備就緒...<br></div>
+
+    <div class="sos-container">
+        <button id="sos-btn" class="sos-btn" aria-label="緊急通報按鈕">
+            <div class="icon">🆘</div>
+            <span class="label">長按求救</span>
+        </button>
+        <div id="hint-text" class="hint-text">長按 1.5 秒啟動通報</div>
+    </div>
+
+    <script>
+        /**
+         * 設定區
+         */
+        const CONFIG = {
+            EMERGENCY_PHONE: "0912345678", // 替換為實際緊急電話
+            API_ENDPOINT: "/api/emergency/log", // 後端接收 API
+            PRESS_DURATION: 1500, // 長按所需時間 (毫秒)
+            GPS_TIMEOUT: 2000     // 定位最長等待時間，超過則強制撥號
+        };
+
+        /**
+         * 變數初始化
+         */
+        const sosBtn = document.getElementById('sos-btn');
+        const label = sosBtn.querySelector('.label');
+        const hintText = document.getElementById('hint-text');
+        const debugConsole = document.getElementById('debug-console');
+        
+        let pressTimer = null;
+        let isActivated = false; // 避免重複觸發
+
+        /**
+         * 輔助函式：寫入除錯訊息
+         */
+        function log(msg) {
+            const time = new Date().toLocaleTimeString();
+            debugConsole.innerHTML += `[${time}] ${msg}<br>`;
+            debugConsole.scrollTop = debugConsole.scrollHeight;
+            console.log(msg);
+        }
+
+        /**
+         * 1. 使用者互動處理 (長按邏輯)
+         */
+        function startPress(e) {
+            // 防止右鍵選單或手機長按選取
+            if(e.type === "touchstart") {
+                // e.preventDefault(); // 注意：如果需要頁面滾動，這裡要小心使用
+            }
+            
+            if (isActivated) return;
+
+            log("偵測到按壓...");
+            sosBtn.classList.add('pressing');
+            label.innerText = "通報中...";
+            hintText.classList.add('fade-out'); // 隱藏提示，減少干擾
+
+            // 設定計時器
+            pressTimer = setTimeout(() => {
+                triggerEmergencyProcedure();
+            }, CONFIG.PRESS_DURATION);
+        }
+
+        function cancelPress() {
+            if (isActivated) return;
+
+            if (pressTimer) {
+                clearTimeout(pressTimer);
+                pressTimer = null;
+            }
+
+            // 只有在還沒處於"按壓中"狀態才不需要 log，避免雜訊
+            if (sosBtn.classList.contains('pressing')) {
+                log("按壓取消");
+                sosBtn.classList.remove('pressing');
+                label.innerText = "長按求救";
+                hintText.classList.remove('fade-out');
+            }
+        }
+
+        /**
+         * 2. 緊急程序核心邏輯
+         */
+        function triggerEmergencyProcedure() {
+            isActivated = true;
+            clearTimeout(pressTimer); // 清除長按計時
+            
+            // UI 更新
+            sosBtn.classList.remove('pressing');
+            sosBtn.classList.add('activated');
+            label.innerText = "已啟動";
+            hintText.innerHTML = "正在定位並撥號...";
+            hintText.classList.remove('fade-out');
+
+            // 觸覺回饋 (手機震動)
+            if (navigator.vibrate) {
+                navigator.vibrate([200, 100, 200, 100, 500]);
+            }
+
+            log("🔥 緊急程序啟動！");
+
+            // --- 並行處理：設定一個強制撥號的保險絲 ---
+            let callHasBeenTriggered = false;
+
+            const triggerCall = (source) => {
+                if (!callHasBeenTriggered) {
+                    callHasBeenTriggered = true;
+                    log(`📞 正在撥打電話 (觸發源: ${source})`);
+                    
+                    // 這裡執行撥號
+                    window.location.href = `tel:${CONFIG.EMERGENCY_PHONE}`;
+                    
+                    // 撥號後稍微延遲重置 UI (選用)
+                    setTimeout(() => {
+                        // alert("系統已嘗試撥號並傳送位置"); // 測試用
+                    }, 1000);
+                }
+            };
+
+            // 設定安全計時器 (Safety Net)
+            const safetyTimer = setTimeout(() => {
+                log("⚠️ 定位超時，強制執行撥號");
+                triggerCall('Timeout Safety Net');
+            }, CONFIG.GPS_TIMEOUT);
+
+            // --- 嘗試獲取位置 ---
+            if (!navigator.geolocation) {
+                log("❌ 瀏覽器不支援定位");
+                triggerCall('No Geolocation Support');
+                return;
+            }
+
+            log("📍 正在請求高精度位置...");
+            
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    // --- 定位成功 ---
+                    clearTimeout(safetyTimer); // 取消強制撥號計時器，改由這裡觸發
+
+                    const payload = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude,
+                        accuracy: position.coords.accuracy,
+                        timestamp: new Date().toISOString(),
+                        alert_type: "SOS_BUTTON",
+                        user_agent: navigator.userAgent
+                    };
+
+                    log(`✅ 定位成功: ${payload.lat.toFixed(5)}, ${payload.lng.toFixed(5)} (精度: ${payload.accuracy}m)`);
+
+                    // 傳送資料 (使用 Beacon API)
+                    sendDataToBackend(payload);
+
+                    // 立即撥號
+                    triggerCall('GPS Success');
+                },
+                (error) => {
+                    // --- 定位失敗 ---
+                    clearTimeout(safetyTimer); // 取消強制撥號計時器
+                    
+                    const errorMsg = `定位錯誤 (Code ${error.code}): ${error.message}`;
+                    log(`❌ ${errorMsg}`);
+
+                    // 嘗試傳送錯誤紀錄
+                    sendDataToBackend({ error: errorMsg, timestamp: new Date().toISOString() });
+
+                    // 失敗仍要撥號
+                    triggerCall('GPS Error');
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: CONFIG.GPS_TIMEOUT - 200, // 比安全計時器稍微短一點
+                    maximumAge: 0
+                }
+            );
+        }
+
+        /**
+         * 3. 資料傳送 (Beacon API)
+         */
+        function sendDataToBackend(data) {
+            const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+            
+            // 優先使用 sendBeacon
+            if (navigator.sendBeacon) {
+                const success = navigator.sendBeacon(CONFIG.API_ENDPOINT, blob);
+                log(`📡 資料發送請求 (Beacon): ${success ? '已排程' : '失敗'}`);
+            } else {
+                // Fallback: 使用 fetch (在頁面即將跳轉時可能不穩定)
+                fetch(CONFIG.API_ENDPOINT, {
+                    method: 'POST',
+                    body: blob,
+                    keepalive: true // 重要：嘗試在頁面關閉後保持連線
+                }).catch(err => log("Fetch Error: " + err));
+            }
+        }
+
+        /**
+         * 事件綁定
+         */
+        // 滑鼠事件 (電腦測試用)
+        sosBtn.addEventListener('mousedown', startPress);
+        sosBtn.addEventListener('mouseup', cancelPress);
+        sosBtn.addEventListener('mouseleave', cancelPress);
+
+        // 觸控事件 (手機用)
+        sosBtn.addEventListener('touchstart', startPress);
+        sosBtn.addEventListener('touchend', cancelPress);
+        sosBtn.addEventListener('touchcancel', cancelPress);
+
+    </script>
+</body>
+</html>
